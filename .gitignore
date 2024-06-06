@@ -1,2 +1,9 @@
 
 out
+__*
+*/*__*
+kernel.* *.so test
+*_*.c
+*_*.h
+*.o
+core

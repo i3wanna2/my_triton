@@ -11,7 +11,12 @@ import triton.language as tl
 以inner点为分块依据
 A、B点一样大
 注意: inner一定整除, 没写非整除逻辑
+mask版: 2d9pt
+设inner大小为[a][b], 那么所需的数据load到[a][b][9]?中, 9个是这个点所需的全部
+load时使用mask
+然后reduce其它维, 得到[a][b]的输出
 
+对比scatter, 仅改变了计算process, 分块方法一样
 """
 
 @triton.jit
@@ -21,7 +26,7 @@ def stencil_kernel(
     # A网格的大小
     M, N,
     #半径大小
-    R,
+    R:tl.constexpr,
     #分块信息
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr
@@ -36,55 +41,33 @@ def stencil_kernel(
 
     #每个块负责 BLOCK_SIZE_M*BLOCK_SIZE_N 个元素
     #this的块右上角元素 B的
-    offs_bm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    pid_bm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    pid_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    #中心点 a中的位置
+    offs_bm = pid_bm + R
+    offs_bn = pid_bn + R
+    radius_offs = tl.arange(0, 8)
+    radius_offs_true = radius_offs - R
 
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_an = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    #vertical tlie
+    a_ptrs = A + ((offs_bm[:,None]+radius_offs_true[None,:])*N)[:,None,:] + offs_bn[None,:,None]
+    # x, y+1
+    a_data = tl.load(a_ptrs, mask = radius_offs[None,None,:]<5)
+    result = tl.sum(a_data, axis=-1)
+    # breakpoint()
 
+    #horizontal tile
+    a_ptrs = A + ((offs_bm[:,None]+radius_offs_true[None,:]))[:,None,:] + offs_bn[None,:,None]*N
+    a_data = tl.load(a_ptrs, mask = radius_offs[None,None,:]<5)
+    result += tl.sum(a_data, axis=-1)
 
-    #计算
-    result = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float16)
-
-    #竖reduce
-    a_ptrs = A + ((offs_am[:,None])*N + offs_an[None,:]+R) 
+    #减去中心点
+    a_ptrs = A + (offs_bm)[:,None]*N + offs_bn[None,:]
     a_data = tl.load(a_ptrs)
-    result = result + a_data
-
-    a_ptrs = A + (((offs_am[:,None])+1)*N + offs_an[None,:]+R) 
-    a_data = tl.load(a_ptrs)
-    result = result + a_data
-
-    a_ptrs = A + (((offs_am[:,None])+2)*N + offs_an[None,:]+R) 
-    a_data = tl.load(a_ptrs)
-    result = result + a_data
-
-    a_ptrs = A + (((offs_am[:,None])+3)*N + offs_an[None,:]+R) 
-    a_data = tl.load(a_ptrs)
-    result = result + a_data
-
-    a_ptrs = A + (((offs_am[:,None])+4)*N + offs_an[None,:]+R) 
-    a_data = tl.load(a_ptrs)
-    result = result + a_data
-
-    #横reduce
-    a_ptrs = A + (((offs_am[:,None])+R)*N + offs_an[None,:] + 0) 
-    a_data = tl.load(a_ptrs)
-    result = result + a_data
-
-    a_ptrs = A + (((offs_am[:,None])+R)*N + offs_an[None,:] + 1) 
-    a_data = tl.load(a_ptrs)
-    result = result + a_data
-
-    a_ptrs = A + (((offs_am[:,None])+R)*N + offs_an[None,:] + 3) 
-    a_data = tl.load(a_ptrs)
-    result = result + a_data
-
-    a_ptrs = A + (((offs_am[:,None])+R)*N + offs_an[None,:] + 4) 
-    a_data = tl.load(a_ptrs)
-    result = result + a_data
+    result -= a_data
     
-    b_ptrs = B + ((offs_bm[:,None]+R)*N + offs_bn[None,:] + R)
+    #写回
+    b_ptrs = B + (offs_bm[:,None])*N + offs_bn[None,:]
     tl.store(b_ptrs, result)
 
 def stencil(A, B, R):
@@ -103,9 +86,10 @@ def stencil(A, B, R):
 # r = 2
 # m = 4
 # n = 4
-# # a = torch.ones((m+2*r, n+2*r), device="cuda", dtype=torch.float16)
+# a = torch.ones((m+2*r, n+2*r), device="cuda", dtype=torch.float16)
 # a = torch.randn((m+2*r, n+2*r), device="cuda", dtype=torch.float16)
-# triton_output = stencil(a, r)
+# b = torch.empty((m+2*r, n+2*r), device=a.device, dtype=torch.float16)
+# triton_output = stencil(a, b, r)
 # print(a)
 # print(triton_output)
 
@@ -118,7 +102,7 @@ def benchmark(m,n,r):
     return ms, max_ms, min_ms
 
 r = 2
-m = 512
+m = 512 #内部点大小
 n = 512
 ms, max_ms, min_ms =benchmark(m,n,r)
 print(ms)
