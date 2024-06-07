@@ -114,11 +114,11 @@ def benchmark(m,n,r):
     A = torch.randn((m+2*r, n+2*r), device="cuda", dtype=torch.float16)
     B = torch.empty((m+2*r, n+2*r), device=A.device, dtype=torch.float16)
     quantiles = [0.5, 0.2, 0.8]
-    ms, min_ms, max_ms = triton.testing.do_bench(lambda: stencil(A, B, r), quantiles=quantiles)
+    ms, min_ms, max_ms = triton.testing.do_bench(lambda: stencil(A, B, r), quantiles=quantiles,warmup=500,rep=5000)
     return ms, max_ms, min_ms
 
 r = 2
-m = 512
-n = 512
+m = 7200
+n = 7200
 ms, max_ms, min_ms =benchmark(m,n,r)
 print(ms)

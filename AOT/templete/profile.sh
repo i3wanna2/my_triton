@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=1 ncu --target-processes all -f -o profile ./test
